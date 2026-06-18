@@ -1,0 +1,84 @@
+#!/usr/bin/env fish
+
+
+# update_trunk changes to the trunk branch and then pulls the latest changes
+# when that is done it will return back to the branch that the command was called from
+# if this was called from the trunk branch it will just pull the latest changes and return
+function update_trunk
+    set target_branch (git config --get zemzale.release)
+    if test -z $target_branch
+        set target_branch "main"
+    end
+
+    set current_branch (git branch --show-current)
+    
+    if test "$current_branch" = "$target_branch"
+        # Already on trunk branch, just pull
+        gum spin --show-output --spinner meter --title "Pulling latest changes" -- git pull
+    else
+        # Save current branch, switch to trunk, pull, then switch back
+        gum spin --show-output --spinner meter --title "Stashing changes" -- git stash
+        gum spin --show-output --spinner meter --title "Switching to $target_branch branch" -- git switch $target_branch
+        gum spin --show-output --spinner meter --title "Pulling latest changes" -- git pull
+        gum spin --show-output --spinner meter --title "Switching back to $current_branch" -- git switch $current_branch
+        gum spin --show-output --spinner meter --title "Popping changes" -- git stash pop
+    end
+end
+
+function run_trunk
+    set target_branch (git config --get zemzale.release)
+
+    if test -z $target_branch
+    set target_branch "main"
+    end
+
+    gum spin --show-output --spinner meter --title "Stashing changes" -- git stash
+    gum spin --show-output --spinner meter --title "Switching to main branch" -- git switch $target_branch
+    gum spin --show-output --spinner meter --title "Pulling latest changes" -- git pull
+    gum spin --show-output --spinner meter --title "Cleaning up merged branches" -- git branch --merged | \
+        grep -v "^\*" | \
+        tr -d ' ' | \
+        grep -v --perl-regexp '^main$\/.' | \
+        xargs -n 1 --no-run-if-empty git branch -d
+    gum spin --show-output --spinner meter --title "Cleaning up remote branches" -- git remote prune origin
+    gum spin --show-output --spinner meter --title "Poping changes" -- git stash pop
+end
+
+
+function change_trunk
+    set new_trunk $(git branch | fzf --layout reverse --preview 'git show --shortstat {1}' --preview-window down | awk '{print $1}')
+
+    if test -z $new_trunk
+        echo "No branch selected"
+        exit 0
+    end
+
+    git config --unset-all zemzale.release
+    git config --add zemzale.release $new_trunk
+end
+
+function status_trunk
+    set target_branch (git config --get zemzale.release)
+    if test -z $target_branch
+        set target_branch "main"
+    end
+
+    echo $target_branch
+end
+
+function main
+    switch $argv[1]
+        case "change"
+            change_trunk
+        case "status"
+            status_trunk
+        case "pull"
+            update_trunk
+        case "*"
+            run_trunk
+    end
+end
+
+main $argv
+
+
