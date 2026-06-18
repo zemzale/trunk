@@ -1,0 +1,12 @@
+[package]
+name = "trunk-codex"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "trunk-codex"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+indicatif = "0.17"
