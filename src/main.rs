@@ -11,11 +11,19 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
 
     match args.next().as_deref() {
+        Some("--help") => help_trunk(),
         Some("change") => change_trunk(),
         Some("status") => status_trunk(),
         Some("pull") => update_trunk(),
         _ => run_trunk(),
     }
+}
+
+fn help_trunk() -> Result<()> {
+    println!(
+        "trunk-codex\n\nUsage:\n  trunk-codex\n  trunk-codex pull\n  trunk-codex change\n  trunk-codex status\n  trunk-codex --help\n\nCommands:\n  pull     Update the configured trunk branch, then return to the current branch\n  change   Select and store the trunk branch in git config\n  status   Print the configured trunk branch\n  --help   Print this help text\n\nDefault command:\n  Stash changes, switch to the configured trunk branch, pull, delete merged branches, prune origin, and restore stashed changes\n"
+    );
+    Ok(())
 }
 
 fn update_trunk() -> Result<()> {
