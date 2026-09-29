@@ -152,17 +152,18 @@ fn current_branch() -> Result<String> {
 }
 
 fn cleanup_merged_branches(target_branch: &str) -> Result<()> {
+    let merged: Vec<String> = git_output(["branch", "--merged"])?
+        .lines()
+        .map(parse_branch_line)
+        .filter(|branch| !branch.is_empty() && branch != target_branch)
+        .collect();
+
+    let skipped = cleanup_merged_worktrees(&merged)?;
+
     let outputs = with_spinner("Cleaning up merged branches", || {
-        let merged = git_output(["branch", "--merged"])?;
         let mut outputs = Vec::new();
 
-        for line in merged.lines() {
-            let branch = parse_branch_line(line);
-
-            if branch.is_empty() || branch == target_branch {
-                continue;
-            }
-
+        for branch in merged.iter().filter(|branch| !skipped.contains(branch)) {
             outputs.push(run_git(["branch", "-d", branch.as_str()])?);
         }
 
@@ -174,6 +175,68 @@ fn cleanup_merged_branches(target_branch: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Removes worktrees that have a merged branch checked out so the branch can be deleted.
+/// Returns the branches whose worktree could not be removed (e.g. uncommitted changes).
+fn cleanup_merged_worktrees(merged: &[String]) -> Result<Vec<String>> {
+    run_git(["worktree", "prune"])?;
+
+    let worktrees = parse_worktrees(&git_output(["worktree", "list", "--porcelain"])?);
+    let mut skipped = Vec::new();
+
+    // The first entry is the main worktree, which git cannot remove.
+    for worktree in worktrees.iter().skip(1) {
+        let Some(branch) = worktree.branch.as_deref() else {
+            continue;
+        };
+
+        if !merged.iter().any(|merged| merged == branch) {
+            continue;
+        }
+
+        let output = with_spinner(&format!("Removing worktree {}", worktree.path), || {
+            run_command(
+                "git",
+                &collect_args(["worktree", "remove", worktree.path.as_str()]),
+            )
+        })?;
+
+        if !output.status.success() {
+            print_output(&output)?;
+            eprintln!(
+                "Skipping branch {branch}: could not remove worktree {}",
+                worktree.path
+            );
+            skipped.push(branch.to_string());
+        }
+    }
+
+    Ok(skipped)
+}
+
+struct Worktree {
+    path: String,
+    branch: Option<String>,
+}
+
+fn parse_worktrees(porcelain: &str) -> Vec<Worktree> {
+    let mut worktrees = Vec::new();
+
+    for line in porcelain.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            worktrees.push(Worktree {
+                path: path.to_string(),
+                branch: None,
+            });
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            if let Some(worktree) = worktrees.last_mut() {
+                worktree.branch = Some(branch.trim_start_matches("refs/heads/").to_string());
+            }
+        }
+    }
+
+    worktrees
 }
 
 fn parse_branch_line(line: &str) -> String {
@@ -359,4 +422,22 @@ fn command_label(program: &str, args: &[OsString]) -> String {
     let mut parts = vec![program.to_string()];
     parts.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_worktree_porcelain() {
+        let porcelain = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo-feat\nHEAD def\nbranch refs/heads/feat/x\n\nworktree /repo-detached\nHEAD 123\ndetached\n";
+        let worktrees = parse_worktrees(porcelain);
+
+        assert_eq!(worktrees.len(), 3);
+        assert_eq!(worktrees[0].path, "/repo");
+        assert_eq!(worktrees[0].branch.as_deref(), Some("main"));
+        assert_eq!(worktrees[1].path, "/repo-feat");
+        assert_eq!(worktrees[1].branch.as_deref(), Some("feat/x"));
+        assert_eq!(worktrees[2].branch, None);
+    }
 }
